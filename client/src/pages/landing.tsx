@@ -11,7 +11,7 @@ export default function Landing() {
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-2">
               <Music className="text-accent-red text-2xl" />
-              <h1 className="text-xl font-bold text-text-primary">MusicStream</h1>
+              <h1 className="text-xl font-bold text-text-primary">Harmony</h1>
             </div>
             <Button 
               onClick={() => window.location.href = '/api/login'}

@@ -21,7 +21,7 @@ export default function Header() {
           <div className="flex items-center space-x-8">
             <div className="flex items-center space-x-2">
               <Music className="text-accent-red text-2xl" />
-              <h1 className="text-xl font-bold text-text-primary">MusicStream</h1>
+              <h1 className="text-xl font-bold text-text-primary">Harmony</h1>
             </div>
             <nav className="hidden md:flex space-x-6">
               <a href="#" className="text-text-primary font-medium hover:text-accent-red transition-colors">
