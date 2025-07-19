@@ -7,8 +7,14 @@ import {
   featuredContent,
   userFavorites,
   playlistSongs,
+  userPlaylists,
+  userPlaylistSongs,
+  userFollows,
+  songLikes,
+  songShares,
+  listeningHistory,
   type User,
-  type UpsertUser,
+  type InsertUser,
   type Artist,
   type InsertArtist,
   type Song,
@@ -21,15 +27,30 @@ import {
   type InsertFeaturedContent,
   type UserFavorite,
   type InsertUserFavorite,
+  type UserPlaylist,
+  type InsertUserPlaylist,
+  type UserPlaylistSong,
+  type InsertUserPlaylistSong,
+  type UserFollow,
+  type InsertUserFollow,
+  type SongLike,
+  type InsertSongLike,
+  type SongShare,
+  type InsertSongShare,
+  type ListeningHistory,
+  type InsertListeningHistory,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, asc } from "drizzle-orm";
+import { eq, desc, asc, and, sql } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
-  // User operations (mandatory for Replit Auth)
-  getUser(id: string): Promise<User | undefined>;
-  upsertUser(user: UpsertUser): Promise<User>;
+  // User operations
+  getUsers(): Promise<User[]>;
+  getUser(id: number): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: number, user: Partial<InsertUser>): Promise<User>;
   
   // Artist operations
   getArtists(): Promise<Artist[]>;
@@ -37,10 +58,12 @@ export interface IStorage {
   createArtist(artist: InsertArtist): Promise<Artist>;
   
   // Song operations
-  getSongs(): Promise<(Song & { artist: Artist | null })[]>;
-  getTrendingSongs(): Promise<(Song & { artist: Artist | null })[]>;
-  getSong(id: number): Promise<Song | undefined>;
+  getSongs(): Promise<(Song & { artist: Artist | null; uploader: User | null })[]>;
+  getTrendingSongs(): Promise<(Song & { artist: Artist | null; uploader: User | null })[]>;
+  getSong(id: number): Promise<(Song & { artist: Artist | null; uploader: User | null }) | undefined>;
   createSong(song: InsertSong): Promise<Song>;
+  updateSong(id: number, song: Partial<InsertSong>): Promise<Song>;
+  deleteSong(id: number): Promise<void>;
   
   // Podcast operations
   getPodcasts(): Promise<Podcast[]>;
@@ -53,34 +76,67 @@ export interface IStorage {
   getPlaylist(id: number): Promise<Playlist | undefined>;
   createPlaylist(playlist: InsertPlaylist): Promise<Playlist>;
   
+  // User playlist operations
+  getUserPlaylists(userId: number): Promise<UserPlaylist[]>;
+  getUserPlaylist(id: number): Promise<(UserPlaylist & { songs: (Song & { artist: Artist | null })[] }) | undefined>;
+  createUserPlaylist(playlist: InsertUserPlaylist): Promise<UserPlaylist>;
+  updateUserPlaylist(id: number, playlist: Partial<InsertUserPlaylist>): Promise<UserPlaylist>;
+  deleteUserPlaylist(id: number): Promise<void>;
+  addSongToPlaylist(playlistSong: InsertUserPlaylistSong): Promise<UserPlaylistSong>;
+  removeSongFromPlaylist(playlistId: number, songId: number): Promise<void>;
+  
   // Featured content operations
   getFeaturedContent(): Promise<FeaturedContent[]>;
   createFeaturedContent(content: InsertFeaturedContent): Promise<FeaturedContent>;
   
   // User favorites operations
-  getUserFavorites(userId: string): Promise<UserFavorite[]>;
+  getUserFavorites(userId: number): Promise<UserFavorite[]>;
   addToFavorites(favorite: InsertUserFavorite): Promise<UserFavorite>;
-  removeFromFavorites(userId: string, contentType: string, contentId: number): Promise<void>;
+  removeFromFavorites(userId: number, contentType: string, contentId: number): Promise<void>;
+  
+  // Social features
+  followUser(follow: InsertUserFollow): Promise<UserFollow>;
+  unfollowUser(followerId: number, followingId: number): Promise<void>;
+  getUserFollowers(userId: number): Promise<(UserFollow & { follower: User })[]>;
+  getUserFollowing(userId: number): Promise<(UserFollow & { following: User })[]>;
+  
+  // Song interactions
+  likeSong(like: InsertSongLike): Promise<SongLike>;
+  unlikeSong(userId: number, songId: number): Promise<void>;
+  getSongLikes(songId: number): Promise<number>;
+  shareSong(share: InsertSongShare): Promise<SongShare>;
+  
+  // Listening history
+  addToHistory(history: InsertListeningHistory): Promise<ListeningHistory>;
+  getUserHistory(userId: number): Promise<(ListeningHistory & { song: Song & { artist: Artist | null } })[]>;
 }
 
 export class DatabaseStorage implements IStorage {
-  // User operations (mandatory for Replit Auth)
-  async getUser(id: string): Promise<User | undefined> {
+  // User operations
+  async getUsers(): Promise<User[]> {
+    return await db.select().from(users).orderBy(asc(users.username));
+  }
+
+  async getUser(id: number): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
 
-  async upsertUser(userData: UpsertUser): Promise<User> {
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+
+  async createUser(userData: InsertUser): Promise<User> {
+    const [user] = await db.insert(users).values(userData).returning();
+    return user;
+  }
+
+  async updateUser(id: number, userData: Partial<InsertUser>): Promise<User> {
     const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
+      .update(users)
+      .set({ ...userData, updatedAt: new Date() })
+      .where(eq(users.id, id))
       .returning();
     return user;
   }
@@ -101,51 +157,104 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Song operations
-  async getSongs(): Promise<(Song & { artist: Artist | null })[]> {
+  async getSongs(): Promise<(Song & { artist: Artist | null; uploader: User | null })[]> {
     return await db
       .select({
         id: songs.id,
         title: songs.title,
         artistId: songs.artistId,
+        uploadedBy: songs.uploadedBy,
         albumArt: songs.albumArt,
         audioUrl: songs.audioUrl,
+        audioFileName: songs.audioFileName,
+        fileSize: songs.fileSize,
         duration: songs.duration,
         genre: songs.genre,
+        playCount: songs.playCount,
+        likesCount: songs.likesCount,
+        isPublic: songs.isPublic,
         createdAt: songs.createdAt,
         artist: artists,
+        uploader: users,
       })
       .from(songs)
       .leftJoin(artists, eq(songs.artistId, artists.id))
+      .leftJoin(users, eq(songs.uploadedBy, users.id))
+      .where(eq(songs.isPublic, true))
       .orderBy(desc(songs.createdAt));
   }
 
-  async getTrendingSongs(): Promise<(Song & { artist: Artist | null })[]> {
+  async getTrendingSongs(): Promise<(Song & { artist: Artist | null; uploader: User | null })[]> {
     return await db
       .select({
         id: songs.id,
         title: songs.title,
         artistId: songs.artistId,
+        uploadedBy: songs.uploadedBy,
         albumArt: songs.albumArt,
         audioUrl: songs.audioUrl,
+        audioFileName: songs.audioFileName,
+        fileSize: songs.fileSize,
         duration: songs.duration,
         genre: songs.genre,
+        playCount: songs.playCount,
+        likesCount: songs.likesCount,
+        isPublic: songs.isPublic,
         createdAt: songs.createdAt,
         artist: artists,
+        uploader: users,
       })
       .from(songs)
       .leftJoin(artists, eq(songs.artistId, artists.id))
-      .orderBy(desc(songs.createdAt))
+      .leftJoin(users, eq(songs.uploadedBy, users.id))
+      .where(eq(songs.isPublic, true))
+      .orderBy(desc(songs.playCount), desc(songs.likesCount))
       .limit(9);
   }
 
-  async getSong(id: number): Promise<Song | undefined> {
-    const [song] = await db.select().from(songs).where(eq(songs.id, id));
-    return song;
+  async getSong(id: number): Promise<(Song & { artist: Artist | null; uploader: User | null }) | undefined> {
+    const [result] = await db
+      .select({
+        id: songs.id,
+        title: songs.title,
+        artistId: songs.artistId,
+        uploadedBy: songs.uploadedBy,
+        albumArt: songs.albumArt,
+        audioUrl: songs.audioUrl,
+        audioFileName: songs.audioFileName,
+        fileSize: songs.fileSize,
+        duration: songs.duration,
+        genre: songs.genre,
+        playCount: songs.playCount,
+        likesCount: songs.likesCount,
+        isPublic: songs.isPublic,
+        createdAt: songs.createdAt,
+        artist: artists,
+        uploader: users,
+      })
+      .from(songs)
+      .leftJoin(artists, eq(songs.artistId, artists.id))
+      .leftJoin(users, eq(songs.uploadedBy, users.id))
+      .where(eq(songs.id, id));
+    return result;
   }
 
   async createSong(song: InsertSong): Promise<Song> {
     const [newSong] = await db.insert(songs).values(song).returning();
     return newSong;
+  }
+
+  async updateSong(id: number, songData: Partial<InsertSong>): Promise<Song> {
+    const [song] = await db
+      .update(songs)
+      .set(songData)
+      .where(eq(songs.id, id))
+      .returning();
+    return song;
+  }
+
+  async deleteSong(id: number): Promise<void> {
+    await db.delete(songs).where(eq(songs.id, id));
   }
 
   // Podcast operations
@@ -186,6 +295,105 @@ export class DatabaseStorage implements IStorage {
     return newPlaylist;
   }
 
+  // User playlist operations
+  async getUserPlaylists(userId: number): Promise<UserPlaylist[]> {
+    return await db
+      .select()
+      .from(userPlaylists)
+      .where(eq(userPlaylists.userId, userId))
+      .orderBy(desc(userPlaylists.updatedAt));
+  }
+
+  async getUserPlaylist(id: number): Promise<(UserPlaylist & { songs: (Song & { artist: Artist | null })[] }) | undefined> {
+    const [playlist] = await db.select().from(userPlaylists).where(eq(userPlaylists.id, id));
+    if (!playlist) return undefined;
+
+    const playlistSongs = await db
+      .select({
+        id: songs.id,
+        title: songs.title,
+        artistId: songs.artistId,
+        uploadedBy: songs.uploadedBy,
+        albumArt: songs.albumArt,
+        audioUrl: songs.audioUrl,
+        audioFileName: songs.audioFileName,
+        fileSize: songs.fileSize,
+        duration: songs.duration,
+        genre: songs.genre,
+        playCount: songs.playCount,
+        likesCount: songs.likesCount,
+        isPublic: songs.isPublic,
+        createdAt: songs.createdAt,
+        artist: artists,
+      })
+      .from(userPlaylistSongs)
+      .leftJoin(songs, eq(userPlaylistSongs.songId, songs.id))
+      .leftJoin(artists, eq(songs.artistId, artists.id))
+      .where(eq(userPlaylistSongs.playlistId, id))
+      .orderBy(asc(userPlaylistSongs.position));
+
+    return { ...playlist, songs: playlistSongs };
+  }
+
+  async createUserPlaylist(playlist: InsertUserPlaylist): Promise<UserPlaylist> {
+    const [newPlaylist] = await db.insert(userPlaylists).values(playlist).returning();
+    return newPlaylist;
+  }
+
+  async updateUserPlaylist(id: number, playlistData: Partial<InsertUserPlaylist>): Promise<UserPlaylist> {
+    const [playlist] = await db
+      .update(userPlaylists)
+      .set({ ...playlistData, updatedAt: new Date() })
+      .where(eq(userPlaylists.id, id))
+      .returning();
+    return playlist;
+  }
+
+  async deleteUserPlaylist(id: number): Promise<void> {
+    await db.delete(userPlaylistSongs).where(eq(userPlaylistSongs.playlistId, id));
+    await db.delete(userPlaylists).where(eq(userPlaylists.id, id));
+  }
+
+  async addSongToPlaylist(playlistSong: InsertUserPlaylistSong): Promise<UserPlaylistSong> {
+    const [newPlaylistSong] = await db.insert(userPlaylistSongs).values(playlistSong).returning();
+    
+    // Update song count - get count first
+    const countResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(userPlaylistSongs)
+      .where(eq(userPlaylistSongs.playlistId, playlistSong.playlistId!));
+    
+    await db
+      .update(userPlaylists)
+      .set({ 
+        songCount: countResult[0]?.count || 0,
+        updatedAt: new Date()
+      })
+      .where(eq(userPlaylists.id, playlistSong.playlistId!));
+    
+    return newPlaylistSong;
+  }
+
+  async removeSongFromPlaylist(playlistId: number, songId: number): Promise<void> {
+    await db
+      .delete(userPlaylistSongs)
+      .where(and(eq(userPlaylistSongs.playlistId, playlistId), eq(userPlaylistSongs.songId, songId)));
+    
+    // Update song count - get count first
+    const countResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(userPlaylistSongs)
+      .where(eq(userPlaylistSongs.playlistId, playlistId));
+    
+    await db
+      .update(userPlaylists)
+      .set({ 
+        songCount: countResult[0]?.count || 0,
+        updatedAt: new Date()
+      })
+      .where(eq(userPlaylists.id, playlistId));
+  }
+
   // Featured content operations
   async getFeaturedContent(): Promise<FeaturedContent[]> {
     return await db
@@ -201,7 +409,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // User favorites operations
-  async getUserFavorites(userId: string): Promise<UserFavorite[]> {
+  async getUserFavorites(userId: number): Promise<UserFavorite[]> {
     return await db
       .select()
       .from(userFavorites)
@@ -214,14 +422,166 @@ export class DatabaseStorage implements IStorage {
     return newFavorite;
   }
 
-  async removeFromFavorites(userId: string, contentType: string, contentId: number): Promise<void> {
+  async removeFromFavorites(userId: number, contentType: string, contentId: number): Promise<void> {
     await db
       .delete(userFavorites)
-      .where(
-        eq(userFavorites.userId, userId) &&
-        eq(userFavorites.contentType, contentType) &&
+      .where(and(
+        eq(userFavorites.userId, userId),
+        eq(userFavorites.contentType, contentType),
         eq(userFavorites.contentId, contentId)
-      );
+      ));
+  }
+
+  // Social features
+  async followUser(follow: InsertUserFollow): Promise<UserFollow> {
+    const [newFollow] = await db.insert(userFollows).values(follow).returning();
+    
+    // Update follower and following counts
+    await db
+      .update(users)
+      .set({ followingCount: sql`${users.followingCount} + 1` })
+      .where(eq(users.id, follow.followerId!));
+    
+    await db
+      .update(users)
+      .set({ followerCount: sql`${users.followerCount} + 1` })
+      .where(eq(users.id, follow.followingId!));
+    
+    return newFollow;
+  }
+
+  async unfollowUser(followerId: number, followingId: number): Promise<void> {
+    await db
+      .delete(userFollows)
+      .where(and(eq(userFollows.followerId, followerId), eq(userFollows.followingId, followingId)));
+    
+    // Update follower and following counts
+    await db
+      .update(users)
+      .set({ followingCount: sql`${users.followingCount} - 1` })
+      .where(eq(users.id, followerId));
+    
+    await db
+      .update(users)
+      .set({ followerCount: sql`${users.followerCount} - 1` })
+      .where(eq(users.id, followingId));
+  }
+
+  async getUserFollowers(userId: number): Promise<(UserFollow & { follower: User })[]> {
+    return await db
+      .select({
+        id: userFollows.id,
+        followerId: userFollows.followerId,
+        followingId: userFollows.followingId,
+        followType: userFollows.followType,
+        createdAt: userFollows.createdAt,
+        follower: users,
+      })
+      .from(userFollows)
+      .leftJoin(users, eq(userFollows.followerId, users.id))
+      .where(eq(userFollows.followingId, userId))
+      .orderBy(desc(userFollows.createdAt));
+  }
+
+  async getUserFollowing(userId: number): Promise<(UserFollow & { following: User })[]> {
+    return await db
+      .select({
+        id: userFollows.id,
+        followerId: userFollows.followerId,
+        followingId: userFollows.followingId,
+        followType: userFollows.followType,
+        createdAt: userFollows.createdAt,
+        following: users,
+      })
+      .from(userFollows)
+      .leftJoin(users, eq(userFollows.followingId, users.id))
+      .where(eq(userFollows.followerId, userId))
+      .orderBy(desc(userFollows.createdAt));
+  }
+
+  // Song interactions
+  async likeSong(like: InsertSongLike): Promise<SongLike> {
+    const [newLike] = await db.insert(songLikes).values(like).returning();
+    
+    // Update song likes count
+    await db
+      .update(songs)
+      .set({ likesCount: sql`${songs.likesCount} + 1` })
+      .where(eq(songs.id, like.songId!));
+    
+    return newLike;
+  }
+
+  async unlikeSong(userId: number, songId: number): Promise<void> {
+    await db
+      .delete(songLikes)
+      .where(and(eq(songLikes.userId, userId), eq(songLikes.songId, songId)));
+    
+    // Update song likes count
+    await db
+      .update(songs)
+      .set({ likesCount: sql`${songs.likesCount} - 1` })
+      .where(eq(songs.id, songId));
+  }
+
+  async getSongLikes(songId: number): Promise<number> {
+    const [result] = await db
+      .select({ count: sql`count(*)` })
+      .from(songLikes)
+      .where(eq(songLikes.songId, songId));
+    return Number(result.count) || 0;
+  }
+
+  async shareSong(share: InsertSongShare): Promise<SongShare> {
+    const [newShare] = await db.insert(songShares).values(share).returning();
+    return newShare;
+  }
+
+  // Listening history
+  async addToHistory(history: InsertListeningHistory): Promise<ListeningHistory> {
+    const [newHistory] = await db.insert(listeningHistory).values(history).returning();
+    
+    // Update song play count
+    await db
+      .update(songs)
+      .set({ playCount: sql`${songs.playCount} + 1` })
+      .where(eq(songs.id, history.songId!));
+    
+    return newHistory;
+  }
+
+  async getUserHistory(userId: number): Promise<(ListeningHistory & { song: Song & { artist: Artist | null } })[]> {
+    return await db
+      .select({
+        id: listeningHistory.id,
+        userId: listeningHistory.userId,
+        songId: listeningHistory.songId,
+        playedAt: listeningHistory.playedAt,
+        playDuration: listeningHistory.playDuration,
+        song: {
+          id: songs.id,
+          title: songs.title,
+          artistId: songs.artistId,
+          uploadedBy: songs.uploadedBy,
+          albumArt: songs.albumArt,
+          audioUrl: songs.audioUrl,
+          audioFileName: songs.audioFileName,
+          fileSize: songs.fileSize,
+          duration: songs.duration,
+          genre: songs.genre,
+          playCount: songs.playCount,
+          likesCount: songs.likesCount,
+          isPublic: songs.isPublic,
+          createdAt: songs.createdAt,
+          artist: artists,
+        },
+      })
+      .from(listeningHistory)
+      .leftJoin(songs, eq(listeningHistory.songId, songs.id))
+      .leftJoin(artists, eq(songs.artistId, artists.id))
+      .where(eq(listeningHistory.userId, userId))
+      .orderBy(desc(listeningHistory.playedAt))
+      .limit(50);
   }
 }
 

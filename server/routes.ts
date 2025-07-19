@@ -1,30 +1,79 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
 import { 
+  insertUserSchema,
   insertArtistSchema, 
   insertSongSchema, 
   insertPodcastSchema, 
   insertPlaylistSchema,
   insertFeaturedContentSchema,
-  insertUserFavoriteSchema 
+  insertUserFavoriteSchema,
+  insertUserPlaylistSchema,
+  insertUserPlaylistSongSchema,
+  insertUserFollowSchema,
+  insertSongLikeSchema,
+  insertSongShareSchema,
+  insertListeningHistorySchema
 } from "@shared/schema";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+// Configure multer for file uploads
+const upload = multer({
+  dest: "uploads/",
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /\.(mp3|wav|m4a|aac)$/i;
+    if (allowedTypes.test(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only audio files are allowed"));
+    }
+  },
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
-
-  // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  // Users routes
+  app.get('/api/users', async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
+      const users = await storage.getUsers();
+      res.json(users);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.get('/api/users/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const user = await storage.getUser(id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
       res.json(user);
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  app.post('/api/users', async (req, res) => {
+    try {
+      const validatedData = insertUserSchema.parse(req.body);
+      const user = await storage.createUser(validatedData);
+      res.status(201).json(user);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error creating user:", error);
+      res.status(500).json({ message: "Failed to create user" });
     }
   });
 
@@ -53,7 +102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/artists', isAuthenticated, async (req, res) => {
+  app.post('/api/artists', async (req, res) => {
     try {
       const validatedData = insertArtistSchema.parse(req.body);
       const artist = await storage.createArtist(validatedData);
@@ -102,7 +151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/songs', isAuthenticated, async (req, res) => {
+  app.post('/api/songs', async (req, res) => {
     try {
       const validatedData = insertSongSchema.parse(req.body);
       const song = await storage.createSong(validatedData);
@@ -141,7 +190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/podcasts', isAuthenticated, async (req, res) => {
+  app.post('/api/podcasts', async (req, res) => {
     try {
       const validatedData = insertPodcastSchema.parse(req.body);
       const podcast = await storage.createPodcast(validatedData);
@@ -190,7 +239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/playlists', isAuthenticated, async (req, res) => {
+  app.post('/api/playlists', async (req, res) => {
     try {
       const validatedData = insertPlaylistSchema.parse(req.body);
       const playlist = await storage.createPlaylist(validatedData);
@@ -215,7 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/featured', isAuthenticated, async (req, res) => {
+  app.post('/api/featured', async (req, res) => {
     try {
       const validatedData = insertFeaturedContentSchema.parse(req.body);
       const featured = await storage.createFeaturedContent(validatedData);
@@ -229,10 +278,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // User favorites routes
-  app.get('/api/favorites', isAuthenticated, async (req: any, res) => {
+  // File upload for audio files
+  app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
+      if (!req.file) {
+        return res.status(400).json({ message: "No audio file provided" });
+      }
+
+      const { title, artistId, uploadedBy, genre } = req.body;
+      
+      if (!title) {
+        return res.status(400).json({ message: "Title is required" });
+      }
+
+      // Generate file URL
+      const audioUrl = `/uploads/${req.file.filename}`;
+      
+      // Create song record
+      const songData = {
+        title,
+        artistId: artistId ? parseInt(artistId) : null,
+        uploadedBy: uploadedBy ? parseInt(uploadedBy) : null,
+        audioUrl,
+        audioFileName: req.file.originalname,
+        fileSize: req.file.size,
+        genre: genre || null,
+      };
+
+      const song = await storage.createSong(songData);
+      res.status(201).json(song);
+    } catch (error) {
+      console.error("Error uploading audio:", error);
+      res.status(500).json({ message: "Failed to upload audio file" });
+    }
+  });
+
+  // Serve uploaded files
+  app.use('/uploads', (req, res, next) => {
+    // Allow CORS for audio files
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Accept-Ranges', 'bytes');
+    next();
+  });
+
+  // User favorites routes (without authentication for now)
+  app.get('/api/favorites/:userId', async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId);
       const favorites = await storage.getUserFavorites(userId);
       res.json(favorites);
     } catch (error) {
@@ -241,13 +333,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/favorites', isAuthenticated, async (req: any, res) => {
+  app.post('/api/favorites', async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const validatedData = insertUserFavoriteSchema.parse({
-        ...req.body,
-        userId,
-      });
+      const validatedData = insertUserFavoriteSchema.parse(req.body);
       const favorite = await storage.addToFavorites(validatedData);
       res.status(201).json(favorite);
     } catch (error) {
@@ -259,11 +347,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/favorites/:contentType/:contentId', isAuthenticated, async (req: any, res) => {
+  app.delete('/api/favorites/:userId/:contentType/:contentId', async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const { contentType, contentId } = req.params;
-      await storage.removeFromFavorites(userId, contentType, parseInt(contentId));
+      const { userId, contentType, contentId } = req.params;
+      await storage.removeFromFavorites(parseInt(userId), contentType, parseInt(contentId));
       res.status(204).send();
     } catch (error) {
       console.error("Error removing from favorites:", error);
