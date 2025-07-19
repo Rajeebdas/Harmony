@@ -12,15 +12,7 @@ import {
   Maximize2,
   Heart
 } from "lucide-react";
-
-interface CurrentSong {
-  id: number;
-  title: string;
-  artist: string;
-  albumArt: string;
-  audioUrl?: string;
-  duration: number;
-}
+import { songs } from "@/songs";
 
 export default function MusicPlayer() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -29,17 +21,10 @@ export default function MusicPlayer() {
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
-  
+  const [currentIndex, setCurrentIndex] = useState(0);
+
   const audioRef = useRef<HTMLAudioElement>(null);
-  
-  // Default song (using data from the reference)
-  const [currentSong] = useState<CurrentSong>({
-    id: 1,
-    title: "Dil Galti Kar",
-    artist: "Jubin Nautiyal | Mauni Roy",
-    albumArt: "https://dbrosraaga.netlify.app/gallery/i1.jpeg",
-    duration: 192 // 3:12 in seconds
-  });
+  const currentSong = songs[currentIndex];
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -57,6 +42,14 @@ export default function MusicPlayer() {
     };
   }, [volume]);
 
+  useEffect(() => {
+    setCurrentTime(0);
+    if (isPlaying && audioRef.current) {
+      audioRef.current.load();
+      audioRef.current.play();
+    }
+  }, [currentIndex]);
+
   const togglePlayPause = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -64,10 +57,8 @@ export default function MusicPlayer() {
     if (isPlaying) {
       audio.pause();
     } else {
-      // Since we don't have actual audio URLs, we'll simulate playback
       audio.play().catch(() => {
-        // Fallback for when there's no actual audio file
-        console.log('Audio playback simulated');
+        console.log('Audio playback failed');
       });
     }
     setIsPlaying(!isPlaying);
@@ -76,7 +67,6 @@ export default function MusicPlayer() {
   const handleProgressChange = (value: number[]) => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     const newTime = value[0];
     setCurrentTime(newTime);
     audio.currentTime = newTime;
@@ -85,7 +75,6 @@ export default function MusicPlayer() {
   const handleVolumeChange = (value: number[]) => {
     const newVolume = value[0];
     setVolume(newVolume);
-    
     const audio = audioRef.current;
     if (audio) {
       audio.volume = newVolume / 100;
@@ -103,24 +92,28 @@ export default function MusicPlayer() {
     // TODO: Add to favorites API call
   };
 
+  const playNext = () => {
+    setCurrentIndex((prev) => (prev + 1) % songs.length);
+    setIsPlaying(true);
+  };
+
+  const playPrev = () => {
+    setCurrentIndex((prev) => (prev - 1 + songs.length) % songs.length);
+    setIsPlaying(true);
+  };
+
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-card-bg border-t border-divider z-50">
       <audio ref={audioRef} src={currentSong.audioUrl} />
-      
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between py-3">
           {/* Currently playing song info */}
           <div className="flex items-center space-x-4 flex-1 min-w-0">
             <div className="flex-shrink-0">
-              <img 
-                src={currentSong.albumArt} 
-                alt={currentSong.title}
-                className="w-12 h-12 rounded-lg object-cover"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.src = `https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=50&h=50&fit=crop&crop=center`;
-                }}
-              />
+              {/* Album art placeholder */}
+              <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center">
+                <span className="text-xs text-text-secondary">No Art</span>
+              </div>
             </div>
             <div className="flex-1 min-w-0">
               <h4 className="font-semibold text-text-primary truncate">{currentSong.title}</h4>
@@ -146,7 +139,7 @@ export default function MusicPlayer() {
             >
               <Shuffle className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="sm" className="text-text-secondary hover:text-text-primary">
+            <Button variant="ghost" size="sm" className="text-text-secondary hover:text-text-primary" onClick={playPrev}>
               <SkipBack className="w-4 h-4" />
             </Button>
             <Button 
@@ -155,7 +148,7 @@ export default function MusicPlayer() {
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
             </Button>
-            <Button variant="ghost" size="sm" className="text-text-secondary hover:text-text-primary">
+            <Button variant="ghost" size="sm" className="text-text-secondary hover:text-text-primary" onClick={playNext}>
               <SkipForward className="w-4 h-4" />
             </Button>
             <Button 
@@ -174,12 +167,12 @@ export default function MusicPlayer() {
               <span className="w-10 text-right">{formatTime(currentTime)}</span>
               <Slider
                 value={[currentTime]}
-                max={currentSong.duration}
+                max={audioRef.current?.duration || 100}
                 step={1}
                 onValueChange={handleProgressChange}
                 className="w-24"
               />
-              <span className="w-10">{formatTime(currentSong.duration)}</span>
+              <span className="w-10">{formatTime(audioRef.current?.duration || 0)}</span>
             </div>
             <div className="hidden sm:flex items-center space-x-2">
               <Volume2 className="w-4 h-4 text-text-secondary" />

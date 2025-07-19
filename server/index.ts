@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import path from "path";
 
 const app = express();
 app.use(express.json());
@@ -8,6 +9,9 @@ app.use(express.urlencoded({ extended: false }));
 
 // Serve uploaded files statically
 app.use('/uploads', express.static('uploads'));
+
+// Serve music_files as static files at /music
+app.use('/music', express.static(path.join(__dirname, '..', 'music_files')));
 
 app.use((req, res, next) => {
   const start = Date.now();
