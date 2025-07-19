@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import { songs } from "@/songs";
 
-export default function MusicPlayer() {
+interface MusicPlayerProps {
+  externalPlayIndex?: number | null;
+  onSongEnd?: () => void;
+}
+
+export default function MusicPlayer({ externalPlayIndex, onSongEnd }: MusicPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(75);
@@ -25,6 +30,14 @@ export default function MusicPlayer() {
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const currentSong = songs[currentIndex];
+
+  // Sync with external play index
+  useEffect(() => {
+    if (typeof externalPlayIndex === 'number' && externalPlayIndex >= 0 && externalPlayIndex < songs.length) {
+      setCurrentIndex(externalPlayIndex);
+      setIsPlaying(true);
+    }
+  }, [externalPlayIndex]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -102,9 +115,20 @@ export default function MusicPlayer() {
     setIsPlaying(true);
   };
 
+  // Handle song end
+  const handleEnded = () => {
+    if (isRepeat) {
+      audioRef.current?.play();
+    } else if (onSongEnd) {
+      onSongEnd();
+    } else {
+      playNext();
+    }
+  };
+
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-card-bg border-t border-divider z-50">
-      <audio ref={audioRef} src={currentSong.audioUrl} />
+      <audio ref={audioRef} src={currentSong.audioUrl} onEnded={handleEnded} />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between py-3">
           {/* Currently playing song info */}
