@@ -76,14 +76,6 @@ export default function Header() {
                 </div>
               )}
               
-              <Button 
-                onClick={() => window.location.href = '/api/logout'}
-                variant="outline"
-                size="sm"
-                className="bg-accent-blue hover:bg-blue-600 text-white border-accent-blue"
-              >
-                Sign Out
-              </Button>
             </div>
           </div>
         </div>
