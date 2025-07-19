@@ -6,6 +6,7 @@ import ArtistsSection from "@/components/ArtistsSection";
 import TopChartsSection from "@/components/TopChartsSection";
 import AboutDeveloperSection from "@/components/AboutDeveloperSection";
 import MusicPlayer from "@/components/MusicPlayer";
+import JamendoPlayer from "@/components/JamendoPlayer";
 
 export default function Home() {
   return (
@@ -22,6 +23,7 @@ export default function Home() {
       </div>
 
       <MusicPlayer />
+      <JamendoPlayer />
     </div>
   );
 }
